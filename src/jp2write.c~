@@ -1,0 +1,351 @@
+#include "config.h"
+
+#include <string.h>
+#include <libgimp/gimp.h>
+#include <libgimp/gimpui.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#include "main.h"
+#include "openjpeg.h"
+
+#include "plugin-intl.h"
+
+#ifndef WIN32
+#define stricmp strcasecmp
+#define strnicmp strncasecmp
+#endif
+
+int get_file_format (char *filename)
+{
+  int i;
+  static const char *extension[] =
+    { "pgx", "pnm", "pgm", "ppm", "bmp", "j2k", "jp2", "jpt" };
+  static const int format[] =
+    { PGX_DFMT, PXM_DFMT, PXM_DFMT, PXM_DFMT, BMP_DFMT, J2K_CFMT, JP2_CFMT,
+    JPT_CFMT
+  };
+  char *ext = strrchr (filename, '.') + 1;
+  if (ext)
+    {
+      for (i = 0; i < sizeof (format); i++)
+	{
+	  if (strncmp (ext, extension[i], 3) == 0)
+	    {
+	      return format[i];
+	    }
+	}
+    }
+  return -1;
+}
+
+
+/* -------------------------------------------------------------------------- */
+/**
+ * sample error callback expecting a FILE* client object
+ * */
+void
+error_callback (const char *msg, void *client_data)
+{
+  FILE *stream = (FILE *) client_data;
+  fprintf (stream, "[ERROR] %s", msg);
+}
+
+/**
+ * sample warning callback expecting a FILE* client object
+ * */
+void
+warning_callback (const char *msg, void *client_data)
+{
+  FILE *stream = (FILE *) client_data;
+  fprintf (stream, "[WARNING] %s", msg);
+}
+
+/**
+ * sample debug callback expecting a FILE* client object
+ * */
+void
+info_callback (const char *msg, void *client_data)
+{
+  FILE *stream = (FILE *) client_data;
+  fprintf (stream, "[INFO] %s", msg);
+}
+
+
+GimpPDBStatusType
+write_jp2 (const gchar * filename, gint image_ID, gint drawable_ID)
+{
+  GimpPixelRgn pixel_rgn;
+  GimpDrawable *drawable;
+  GimpImageType drawable_type;
+  gint width, height, comps;
+  gint x1, y1, x2, y2;
+  gint i, j, k;
+  guchar *buf;
+  gint rate;
+
+  /* variables for openjpeg lib */
+  bool bSuccess;
+  bool delete_comment = true;
+  opj_cparameters_t parameters;	/* compression parameters */
+  opj_event_mgr_t event_mgr;	/* event manager */
+  opj_image_t *image = NULL;
+  opj_image_cmptparm_t image_info[3];
+  OPJ_COLOR_SPACE clrspc;
+
+
+  /*
+   *  configure the event callbacks (not required)
+   *  setting of each callback is optionnal
+   */
+  memset (&event_mgr, 0, sizeof (opj_event_mgr_t));
+  event_mgr.error_handler = error_callback;
+  event_mgr.warning_handler = warning_callback;
+  event_mgr.info_handler = info_callback;
+
+  /* set encoding parameters to default values */
+  opj_set_default_encoder_parameters (&parameters);
+  parameters.subsampling_dx = 1;
+  parameters.subsampling_dy = 1;
+  parameters.cp_disto_alloc = 1;
+  parameters.tcp_numlayers = 1;
+
+  /* Get other parameters from interface */
+  parameters.numresolution = 6;
+  dialog(&rate);
+  parameters.tcp_rates[0] = rate;
+
+  strncpy (parameters.outfile, filename, MAX_PATH);
+  parameters.cod_format = get_file_format (filename);
+  if (parameters.cp_comment == NULL)
+    {
+      parameters.cp_comment = "Created by OpenJPEG version 0.9";
+      /* no need to delete parameters.cp_comment on exit */
+      delete_comment = false;
+    }
+
+  // parameters.decod_format = get_file_format (parameters.outfile);
+
+  /* setup GIMP drawables */
+  drawable = gimp_drawable_get (drawable_ID);
+  drawable_type = gimp_drawable_type (drawable_ID);
+  gimp_drawable_mask_bounds (drawable->drawable_id, &x1, &y1, &x2, &y2);
+  width = x2 - x1;
+  height = y2 - y1;
+
+  gimp_pixel_rgn_init (&pixel_rgn, drawable,
+		       x1, y1, width, height, FALSE, FALSE);
+
+  /* Convert drawable image into opj_image_t image object
+   * Use pixel_rgn for that
+   * First initialize image_info with necessary parameters
+   * then call opj_image_create
+   */
+
+  switch (drawable_type)
+    {
+    case GIMP_GRAY_IMAGE:
+      {
+	comps = 1;
+	clrspc = CLRSPC_GRAY;
+	break;
+      }
+    case GIMP_GRAYA_IMAGE:
+      {
+	comps = 1;
+	clrspc = CLRSPC_GRAY;
+	break;
+      }
+
+    case GIMP_RGB_IMAGE:
+      {
+	comps = 3;
+	clrspc = CLRSPC_SRGB;
+	break;
+      }
+    case GIMP_RGBA_IMAGE:
+      {
+	comps = 3;
+	clrspc = CLRSPC_SRGB;
+	break;
+      }
+    case GIMP_INDEXED_IMAGE:
+      {
+	g_message (_("Cannot save indexed images."));
+	return GIMP_PDB_EXECUTION_ERROR;
+      }
+    case GIMP_INDEXEDA_IMAGE:
+      {
+	g_message (_("Cannot save indexed images."));
+	return GIMP_PDB_EXECUTION_ERROR;
+      }
+    }
+
+  // image_info = g_new (opj_image_cmptparm_t, comps);
+  memset (&image_info[0], 0, comps * sizeof (opj_image_cmptparm_t));
+  for (k = 0; k < comps; k++)
+    {
+      image_info[k].dx = 1;
+      image_info[k].dy = 1;
+      image_info[k].w = width;
+      image_info[k].h = height;
+      image_info[k].x0 = x1;
+      image_info[k].y0 = y1;
+      image_info[k].prec = 8;
+      image_info[k].bpp = 8;
+      image_info[k].sgnd = 0;
+    }
+
+  image = opj_image_create (comps, &image_info[0], clrspc);
+
+  if (!image)
+    {
+      printf ("image is bad\n");
+      return GIMP_PDB_EXECUTION_ERROR;
+    }
+
+  image->x1 = width;
+  image->y1 = height;
+  image->x0 = 0;
+  image->y0 = 0;
+
+
+  /* start copying */
+  buf = g_new (guchar, comps * width * height);
+  gimp_pixel_rgn_get_rect (&pixel_rgn, buf, 0, 0, width, height);
+  switch (comps)
+    {
+    case 1:
+      {
+	image->comps[0].data = (int *) (buf);
+	break;
+      }
+    case 2:
+      break;
+
+    case 3:
+      {
+	printf ("Entering RGB here\n");
+	i = 0;
+	j = 0;
+	for (i = 0; i < width * height; i++)
+	  {
+	    j = i * comps;
+	    // printf ("here %d\n", i);
+	    image->comps[0].data[i] = (int) (buf[j]);
+	    image->comps[1].data[i] = (int) (buf[j + 1]);
+	    image->comps[2].data[i] = (int) (buf[j + 2]);
+	  }
+	break;
+      }
+    }
+  printf("data %d\n", image->comps[0].data[34]);
+  printf("data %d\n", image->comps[1].data[34]);
+  printf("data %d\n", image->comps[2].data[34]);
+
+  g_free (buf);
+
+  if (parameters.cod_format == J2K_CFMT)
+    {
+      int codestream_length;
+      opj_cio_t *cio = NULL;
+      FILE *f = NULL;
+
+      /* get a J2K compressor handle */
+      opj_cinfo_t *cinfo = opj_create_compress (CODEC_J2K);
+
+      /* catch events using our callbacks and give a local context */
+      opj_set_event_mgr ((opj_common_ptr) cinfo, &event_mgr, stderr);
+
+      /* setup the encoder parameters using the current image and using user parameters */
+      opj_setup_encoder (cinfo, &parameters, image);
+
+      /* open a byte stream for writing */
+      /* allocate memory for all tiles */
+      cio = opj_cio_open ((opj_common_ptr) cinfo, NULL, 0);
+
+      /* encode the image */
+      bSuccess = opj_encode (cinfo, cio, image, parameters.index);
+
+      if (!bSuccess)
+	{
+	  opj_cio_close (cio);
+	  fprintf (stderr, "failed to encode image\n");
+	  return 1;
+	}
+      codestream_length = cio_tell (cio);
+
+      /* write the buffer to disk */
+      f = fopen (parameters.outfile, "wb");
+      if (!f)
+	{
+	  fprintf (stderr, "failed to open %s for writing\n",
+		   parameters.outfile);
+	  return 1;
+	}
+      fwrite (cio->buffer, 1, codestream_length, f);
+      fclose (f);
+
+      /* close and free the byte stream */
+      opj_cio_close (cio);
+
+      /* free remaining compression structures */
+      opj_destroy_compress (cinfo);
+
+
+    }
+  else
+    {
+
+      int codestream_length;
+      opj_cio_t *cio = NULL;
+      FILE *f = NULL;
+
+      /* get a JP2 compressor handle */
+      opj_cinfo_t *cinfo = opj_create_compress (CODEC_JP2);
+
+      /* catch events using our callbacks and give a local context */
+      opj_set_event_mgr ((opj_common_ptr) cinfo, &event_mgr, stderr);
+
+      /* setup the encoder parameters using the current image 
+       * and using user parameters */
+
+      opj_setup_encoder (cinfo, &parameters, image);
+
+      /* open a byte stream for writing */
+      /* allocate memory for all tiles */
+
+      cio = opj_cio_open ((opj_common_ptr) cinfo, NULL, 0);
+
+      /* encode the image */
+      bSuccess = opj_encode (cinfo, cio, image, parameters.index);
+      if (!bSuccess)
+	{
+	  opj_cio_close (cio);
+	  fprintf (stderr, "failed to encode image\n");
+	  return 1;
+	}
+
+      codestream_length = cio_tell (cio);
+
+      /* write the buffer to disk */
+      f = fopen (parameters.outfile, "wb");
+      if (!f)
+	{
+	  fprintf (stderr, "failed to open %s for writing\n",
+		   parameters.outfile);
+	  return 1;
+	}
+
+      fwrite (cio->buffer, 1, codestream_length, f);
+      fclose (f);
+      /* close and free the byte stream */
+      opj_cio_close (cio);
+
+      /* free remaining compression structures */
+      opj_destroy_compress (cinfo);
+    }
+  opj_image_destroy (image);
+
+  return GIMP_PDB_SUCCESS;
+}

@@ -1,13 +1,11 @@
-gimpDjvu
-========
-
-A gimp plugin to read djvu files.
+GIMP Djvu load 
+=====================
 
 This plug-in presently provides the functionality to load djvu pages.
 
 It requires the djvulibre library, available from http://djvulibre.org
 
-To build and install it,
+To build and install it, just ...
 
 	./configure
 	make

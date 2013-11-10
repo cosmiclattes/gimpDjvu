@@ -1,0 +1,19 @@
+#include "config.h"
+
+#include <string.h>
+#include <libgimp/gimp.h>
+#include <libgimp/gimpui.h>
+#include <stdlib.h>
+#include <stdio.h>
+
+#include "main.h"
+#include "openjpeg.h"
+
+#include "plugin-intl.h"
+
+#ifndef WIN32
+#define stricmp strcasecmp
+#define strnicmp strncasecmp
+#endif
+
+
