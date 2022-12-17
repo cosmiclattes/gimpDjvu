@@ -12,3 +12,8 @@ To build and install it,
 	./configure
 	make
 	make install
+
+
+https://www.gimp-forum.net/Thread-Reading-DJVU
+
+Download : https://cosmiclattes.gateway.scarf.sh/gimpdjvu/linux/0.0.1
